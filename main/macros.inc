@@ -5,30 +5,25 @@
 ;----------------------------------
 ; LCD RELATED MACROS
 ;----------------------------------
-;********************************************
-; Scall: do page selection and call (label) *
-;********************************************
-Scall macro label
-	bsf		PCLATH,3				; Select Page 1
+;***************************************************
+; P0_P1call: call to page 1 subroutine from page 0 *
+;***************************************************
+P0_P1call macro label
+	bsf		PCLATH, 3				; Select Page 1
 	call	label
-	endm
-	
-;********************************************
-; Sreturn: do page selection and call (label) *
-;********************************************
-Sreturn macro
-	bcf		PCLATH,3				; Select Page 0
-	return
+	bcf		PCLATH, 3				;reSelect Page 0
 	endm
 	
 ;******************************
 ; LCD_DELAY: Delay for ~102us *
 ;******************************
 LCD_DELAY macro
+		local	Loop
 		movlw	0xFF				;move the required value of cycles to W
 		movwf	lcd_d1				;move the required value from W to a register
+Loop
 		decfsz	lcd_d1,f			;decrement the value and skip the next inst. when 0
-		goto	$-1					;return to the prev. inst. (decrement), skipped if 0
+		goto	Loop					;return to the prev. inst. (decrement), skipped if 0
 		endm
 
 ;************************************************************
@@ -47,16 +42,16 @@ Display macro Message, Start
 		;Set the Start Position
 		movlw	H'80'				;the instruction to specify position
 		addlw	Start				;modify the instruction with the correct start position
-		call	WR_INS				;Write the instruction to the LCD
+		P0_P1call	WR_INS				;Write the instruction to the LCD
 
 		clrw
 loop_
 		movf	Table_Counter,W		;table counter contains the current char (n) that is next to display
-		call	Message				;this returns the (n)th character into W 
+		P0_P1call	Message				;this returns the (n)th character into W 
 		xorlw	B'00000000'			;This would yield 0 if the W contains 0 (end of Message)
 		btfsc	STATUS,Z			;Z bit is cleared (0) if W wasn't 0 (not end of Message) and will skip
 		goto	end_				;Won't be skipped only if Z was set (1), i.e. end of Message is reached
-		call	WR_DATA				;Write the data to the LCD
+		P0_P1call	WR_DATA				;Write the data to the LCD
 		incf	Table_Counter,f		;increment the table_counter to go to the next word
 		goto	loop_
 end_
@@ -71,8 +66,8 @@ LeftShift macro n
 	movwf	Shift_counter
 repeat_
 	movlw	B'00011000'
-	call	WR_INS
-	call	HalfS
+	P0_P1call	WR_INS
+	P0_P1call	HalfS
 	decfsz	Shift_counter
 	goto	repeat_
 	endm	
@@ -98,22 +93,28 @@ PCinc macro	TableEntries
 ; Delay: delay for (n)*0.5 seconds *
 ;***********************************
 Delay macro	n
+	local 	DelayLoop
+	banksel	D_count
 	movlw	n
 	movwf	D_count
-	call	HalfS
+DelayLoop
+	P0_P1call	HalfS
 	decfsz	D_count,f
-	goto 	$-2
+	goto 	DelayLoop
 	endm
 	
 ;*********************************************
 ; SolenoidDelay: delay for 0.005*(n) seconds *
 ;*********************************************
 SolenoidDelay macro n
+	local	DelayLoop
+	banksel	D_count
 	movlw	n
 	movwf	D_count
+DelayLoop
 	call	StepperDelay
 	decfsz	D_count, f
-	goto	$-2
+	goto	DelayLoop
 	endm
 	
 
@@ -121,14 +122,15 @@ SolenoidDelay macro n
 ; Stepf: Move the stepper forward for (n) steps *
 ;***********************************************
 Stepf macro	n
+	local	Loop
+	local	D_LOOP
 	banksel	PORTC
 	movlw	n
 	movwf	tmp_count
-	local	Loop
 Loop
 	movlw	B'00100000'			; The rotating pattern to turn Stepper ON
 	movwf	PORTC
-	call	StepperDelay 
+	call	StepperDelay
 	movlw	B'00000001'			; The rotating pattern to turn Stepper ON
 	movwf	PORTC
 	call	StepperDelay
@@ -196,15 +198,16 @@ Dispense_loop
 Delay_0
 	btfsc   PORTB, 2
 	goto	end_macro
+	;*****TEMPORARY
 	btfsc	PORTC, 6
 	goto	end_macro
+	;TEMPORARY*****
 	decfsz	d1, f
 	goto	$+2
 	decfsz	d2, f
 	goto	$+2
 	decfsz	d3, f
 	goto	Delay_0
-	Delay	d'1'
 	goto	Dispense_loop		; Loop until a dowel is dispensed
 end_macro
 	decf	NbDowels_B, f
@@ -239,15 +242,16 @@ Dispense_loop
 Delay_0
 	btfsc   PORTB, 2
 	goto	end_macro
+	;*****TEMPORARY
 	btfsc	PORTC, 6
 	goto	end_macro
+	;TEMPORARY*****
 	decfsz	d1, f
 	goto	$+2
 	decfsz	d2, f
 	goto	$+2
 	decfsz	d3, f
 	goto	Delay_0
-	Delay	d'1'
 	goto	Dispense_loop		; Loop until a dowel is dispensed
 end_macro
 	decf	NbDowels_W, f
