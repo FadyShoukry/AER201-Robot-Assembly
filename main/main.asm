@@ -2,6 +2,7 @@
 ;====================================== 
 ; MICROCONTROLLER DECLARATION
 ;======================================
+
 	list p=16f877
 	#include <p16f877.inc>
 	
@@ -84,6 +85,10 @@
 		NbDowels_W
 		NbDowels_B
 		
+		; For the number of dowels display we need 2 register for high and low bytes (BCD)
+		BCD_L
+		BCD_H
+		
 		; Operation time Keeping registers
 		Cycles
 		Seconds
@@ -105,6 +110,15 @@
 		
 		; a temperoary variable used for counting macros only
 		tmp_count
+		
+		; A counter for DC motor cycles
+		DC_Cycles
+		DC_Cycles_H
+		
+		; Delay loop registers
+		d1
+		d2
+		d3
 		
 	endc
 
@@ -154,16 +168,6 @@ WelcomeMsg_2
 	PCinc	WelcomeMsg_2Entries
 WelcomeMsg_2Entries
 	dt		"WOODP(E/A)CKER", 0
-		
-;InitializingMsg
-;	PCinc	InitializingMsgEntries
-;InitializingMsgEntries
-;	dt		"Initializing",0
-		
-PleaseWait
-	PCinc	PleaseWaitEntries
-PleaseWaitEntries
-	dt		"Please Wait...",0
 
 Operation
 	PCinc	OperationEntries
@@ -184,11 +188,6 @@ aNewOperation
 	PCinc	aNewOperationEntries
 aNewOperationEntries
 	dt		"a New Operation",0
-	
-;InputInstrcs
-;	PCinc	InputInstrcsEntries
-;InputInstrcsEntries
-;	dt		"For inputs, Press A to Validate or B to Cancel",0
 	
 BoxMsg_1
 	PCinc	BoxMsg_1Entries
@@ -259,11 +258,6 @@ PatternMsg_2
 	PCinc	PatternMsg_2Entries
 PatternMsg_2Entries
 	dt		"for Box ",0
-	
-PatternInvalidMsg
-	PCinc	PatternInvalidMsgEntries
-PatternInvalidMsgEntries
-	dt		"Pattern # must be between 1 and 6 inclusive",0
 
 EndMsg_1
 	PCinc	EndMsg_1Entries
@@ -329,11 +323,12 @@ INIT
 
     bsf       	STATUS,RP0     	; select bank 1
     clrf      	TRISA          	; All port A is output
-    movlw     	b'11110010'    	; Set RB<7:4> and RB1 to input
+    movlw     	b'11110110'    	; Set RB<7:4> and RB1 and RB2 to input
     movwf     	TRISB
-	;movlw		b'00011000'		; All output except for the I2C pins RC3 and RC4
-    clrf      	TRISC			; All output
-    clrf      	TRISD			; Port D is all output
+	movlw		b'01011000'		; All output except for the I2C pins RC3 and RC4
+    movwf      	TRISC			; All output
+    movlw		b'00000011'
+    movwf      	TRISD			; Port D is all output except RD0 and RD1
 	clrf		TRISE			; Ensure not in slave mode and all outputs
 	movlw		B'00001110'
 	movwf		ADCON1
@@ -363,11 +358,6 @@ INIT
 	Delay		d'6'				;3 seconds delay
 	call		ClrLCD
 	
-;	Display		InitializingMsg, H'02'
-;	Display		PleaseWait,	H'41'
-;	
-;	Delay		d'6'
-	
 NEW_OPERATION
 	call		ClrLCD
 	Display		Prompt0, H'00'
@@ -381,19 +371,10 @@ Poll_2
 	btfss		STATUS,Z		; If pressed (Z = 1) skip and proceed
 	goto		Poll_2			; Else, continue polling
 	
-	;**Start New Operation**
-;	;**Input instructions**
-;	call		OneLineMode
-;	call		ClrLCD
-;	Display		InputInstrcs, H'10'
-;	LeftShift	d'50'
-;	
-;	Delay		d'3'
-	
+
 	;**Number of boxes Prompt**
 Box_prompt
 	call		ClrLCD
-	call		TwoLineMode
 	Display		BoxMsg_1, H'00'
 	Display		BoxMsg_2, H'40'
 	call		DisplayCursor
@@ -452,12 +433,6 @@ Box_Invalid
 	
 	Delay		d'3'
 	
-	call		ClrLCD
-	call		OneLineMode
-	Display		BoxInvalidMsg, H'10'
-	LeftShift	d'50'
-	goto		Box_prompt
-	
 Pattern	
 ;	;**Pattern Viewer Instructions**
 ;	call		ClrLCD
@@ -501,7 +476,6 @@ Pattern_Prompt
 	clrf		box_count		; initialize the box_count variable to 0
 Pattern_Prompt_Loop
 	call		ClrLCD
-	call		TwoLineMode
 	Display		PatternMsg_1, H'00'
 	Display		PatternMsg_2, H'40'
 	
@@ -593,12 +567,6 @@ Pattern_Invalid
 	
 	Delay		d'3'
 	
-	call		ClrLCD
-	call		OneLineMode
-	Display		PatternInvalidMsg, H'10'
-	LeftShift	d'50'
-	goto		Pattern_Prompt_Loop
-
 while_cond
 	movlw		patternNb		;Initialize array pointer
 	addwf		box_count, w	; Get to the current index
@@ -615,13 +583,6 @@ while_cond
 	Display		EndMsg_1, H'02'
 	Display		EndMsg_2, H'41'
 	
-	;**Disable Keypad and Configure PORTB**
-	banksel		PORTB
-	bsf			PORTB, 2		; Set the KPD pin to disable the Keypad
-	banksel		TRISB
-	movlw		b'11111001'
-	movwf		TRISB			; Set the I/O direction for the new required configuration
-	
 	;**Setup Interrupts**
 	banksel		PIR1
 	clrf		PIR1			; Ensure Interrupt Flags are cleared
@@ -633,6 +594,8 @@ while_cond
 	;**Initiliaze time keeping registers**
 	banksel		Cycles
 	clrf		Cycles
+	clrf		DC_Cycles
+	clrf		DC_Cycles_H
 	clrf		Seconds
 	clrf		Minutes
 	
@@ -659,13 +622,14 @@ while_cond
 Process
 	; Move BMA forward
 	Stepf	d'100'
+	Stepf	d'170'
 	;**Grab Box**
 	bsf		PORTA, 0			; Power BMA solenoid --> release the solenoid
-	Stepf	d'20'				; Step 5 steps
+	Stepf	d'35'				; Step 5 steps
 	bcf		PORTA, 0			; Turn off the BMA solenoid --> hold the solenoid
 	
 	;**Move the Stepper in the opposite direction**
-	Stepb	d'50'
+	Stepb	d'105'
 
 	;**Dispensing code**
 	movlw		d'6'
@@ -680,25 +644,58 @@ Dispensing_Loop
 	btfss		pattern, 0		; test bit 0
 	goto		White			; if the bit is not 1 then dispense white
 	Dispense_Brown				; if it is 1 then dispense brown
+	Delay		d'6'
+	decfsz		tmp				
 	goto		Next
+	goto		Done_Dispensing
 White
 	Dispense_White
-Next
-	Stepb		d'15'			; Move the BMA to next position
-	rrf			pattern			; move the next bit to position 0
+	Delay		d'4'
 	decfsz		tmp
-	goto		Dispensing_Loop	; continue looping for the 6 positions
+	goto		Next	; continue looping for the 6 positions
+	goto		Done_Dispensing
+Next
+	Stepb		d'30'			; Move the BMA to next position
+	rrf			pattern			; move the next bit to position 0
+	goto		Dispensing_Loop
 	
 	;**Close and send the box out
-	Stepb		d'20'
+Done_Dispensing
+	Stepb		d'10'
+	Stepf		d'2'
 	banksel		PORTA
 	bsf			PORTA, 0		; Turn On the BMA solenoid
-	Stepb		d'10'			; move a little bit to the back
+	SolenoidDelay d'20'
+	bcf			PORTA, 0
+	SolenoidDelay d'40'
+	bsf			PORTA, 0		; Turn On the BMA solenoid
+	SolenoidDelay d'20'
+	bcf			PORTA, 0
+	SolenoidDelay d'40'
+	bsf			PORTA, 0		; Turn On the BMA solenoid
+	SolenoidDelay d'20'
+	bcf			PORTA, 0
+	SolenoidDelay d'40'
+	bsf			PORTA, 0
+	; Retract the box snapping solenoid
+	bsf			PORTB, 0
+	; Move BMA back
+	Stepb		d'65'			; move all the way to the back
 	bcf			PORTA, 0		; Turn Off the BMA solenoid
-	bsf			PORTA, 4		; Turn the box closing solenoid On
+	; Snapping spasm algorithm
+	Delay		d'4'			; wait for a second
+	movlw		d'5'			; counter to repeat 5 times
+	movwf		tmp
+	; Spasming loop
+Spasm_Loop
+	bcf			PORTB, 0		; Hit
+	Delay		d'2'			; Wait for a second
+	bsf			PORTB, 0		; Retract
+	SolenoidDelay	d'40'
+	decfsz		tmp
+	goto		Spasm_Loop		; Repeat for 5 times
 	Delay		d'4'
-	bcf			PORTA, 4	
-
+	bcf			PORTB, 0
 	;**Finish process and check if done**
 	incf		num_boxes		; increment the number of boxes dispensed
 	movf		num_boxes, W
@@ -707,6 +704,12 @@ Next
 	goto		Process			; if not euqal then loop back and  dispense the next box
 	; Otherwise, if equal, terminate.
 	
+	; Turn DC motor Off
+	bcf			PORTE, 2
+	clrf		PORTE
+	; Turn the Stepper Off
+	bcf			PORTC, 0
+		
 	;**Completion**
 	; Disable Timer
 	banksel		T1CON
@@ -776,11 +779,19 @@ Display_Time
 	Delay		d'3'
 	call		ClrLCD
 	Display		WhiteDowels, H'00'
-	movf		NbDowels_W, W
+	BCD			NbDowels_W
+	movf		BCD_H, W
+	call		Numbers_Zero
+	call		WR_DATA
+	movf		BCD_L, W
 	call		Numbers_Zero
 	call		WR_DATA
 	Display		BrownDowels, H'40'
-	movf		NbDowels_B, W
+	BCD			NbDowels_B
+	movf		BCD_H, W
+	call		Numbers_Zero
+	call		WR_DATA
+	movf		BCD_L, W
 	call		Numbers_Zero
 	call		WR_DATA
 	
@@ -804,53 +815,45 @@ ISR
 	; Check if it's the TIMER
 	banksel	PIR1
 	btfss	PIR1, 0					; Check if the Timer1 Flag is set
-	goto	Check_RB7				; if not Check PORTB
+	goto	Check_RD0				; if not Check PORTB
 	call	TIMER_ISR				; if it is then call the corresponding ISR
 
-Check_RB7
+Check_RD0
 	; Check if it's the White Dowel Counter (RB7)
-	banksel	PORTB
-	btfsc	PORTB, 7
-	goto 	RB7High
+	banksel	PORTD
+	btfsc	PORTD, 0
+	goto 	RD0High
+	;*****TEMPORARY
+	btfsc	PORTC, 3
+	goto	RD0High
+	;TEMPORARY*****
 	bcf		Sensor_state, 0 		; Set the sensor bit for White = 0	
-	goto	Check_RB6
+	goto	Check_RD1
 	
-RB7High
+RD0High
 	btfsc	Sensor_state, 0 	     ; only if the state is 0 then increment
-	goto	Check_RB6				 ; if it's still 1 then move to RB6
+	goto	Check_RD1				 ; if it's still 1 then move to RB6
 	; otherwise increment
-	incf	NbDowels_W, f			 ; if it is not then increment the White Dowels count
+	incf	NbDowels_W, f
 	bsf		Sensor_state, 0 ; Set the sensor state to 1 now to avoid multiple counts
 	
-Check_RB6
+Check_RD1
 	; Check if it's the Brown Dowel Counter (RB6)
-	btfsc	PORTB, 6
-	goto 	RB6High
+	btfsc	PORTD, 1
+	goto 	RD1High
+	;*****TEMPORARY
+	btfsc	PORTC, 4
+	goto	RD1High
+	;TEMPORARY*****
 	bcf		Sensor_state, 1 ; Set hte sensor bit for Brown = 0	
-	goto	Check_RB5
-
-RB6High
-	btfsc	Sensor_state, 1 ; only if the state is 0 then increment
-	goto	Check_RB5				 ; if it's still 1 then move to END
-	; otherwise increment
-	incf	NbDowels_B, f			 ; if it is not then increment the Brown Dowels count
-	bsf		Sensor_state, 1 ; Set the sensor state to 1 now to avoid multiple counts
-
-Check_RB5
-	btfss	PORTB, 5
-	goto	RB5_low
-	bsf		Sensor_state, 2
-	goto	Check_RB4	
-RB5_low
-	bcf		Sensor_state, 2
-
-Check_RB4
-	btfss	PORTB, 4
-	goto	RB4_low
-	bsf		Sensor_state, 3
 	goto	END_ISR
-RB4_low
-	bcf		Sensor_state, 3
+
+RD1High
+	btfsc	Sensor_state, 1 ; only if the state is 0 then increment
+	goto	END_ISR				 ; if it's still 1 then move to END
+	; otherwise increment the Brown Dowels count
+	incf	NbDowels_B, f
+	bsf		Sensor_state, 1 ; Set the sensor state to 1 now to avoid multiple counts
 	
 END_ISR
 	; Clear the RBIF PORTB Flag just in case
@@ -868,27 +871,24 @@ TIMER_ISR
 	
 	banksel	Cycles				; ensure we r in the correct bank (bank0)	
 	incf	Cycles				; Increment the number of cycles
+	incf	DC_Cycles			; Increment the number of DC cycles
+	
 	; Check if number of cycles reached 38 ~ 1s
 	movf	Cycles, W
 	xorlw	d'38'
 	btfss	STATUS, Z
 	goto	END_TIMER_ISR		; if it is not 38 then end
 	; If it did reach 38 increment the  seconds count and reset the cycles count
-	; and change the DC motor direction
 	clrf	Cycles
 	incf	Seconds
-	bcf		PORTE, 2
-	movf	PORTE, W
-	xorlw	B'00000011'			; Inverts bit 0 and 1 only keeping everything else
-	movwf	PORTE
-	bsf		PORTE, 2
-	; Check if Lower bits in Seconds reached 9
 
+	; Check if the lower bits reached 9
 	movf	Seconds, W
-	andlw	H'0F' 				; Mask the upper bits
+	andlw	H'0F'
 	xorlw	d'09'
 	btfss	STATUS, Z
 	goto	END_TIMER_ISR
+	
 	; If it did reach 9 then reset the lower bits and increment upper bits
 	movlw	H'F0'
 	andwf	Seconds, f
@@ -904,6 +904,29 @@ TIMER_ISR
 	clrf	Seconds
 	incf	Minutes
 END_TIMER_ISR
+	; Do the DC cycles Check
+	banksel	DC_Cycles
+	movf	DC_Cycles, W
+	xorlw	d'175'
+	btfss	STATUS, Z
+	goto	END_DC_TIMER_ISR
+	; If the lower count reaches 175 then increment the High count
+	clrf	DC_Cycles
+	incf	DC_Cycles_H
+	; Check if reached 3
+	movf	DC_Cycles_H, W
+	xorlw	d'3'
+	btfss	STATUS, Z
+	goto	END_DC_TIMER_ISR
+	; if it did reach 3 then change the direction of the motor
+	clrf	DC_Cycles_H
+	bcf		PORTE, 2
+	movf	PORTE, W
+	xorlw	B'00000011'			; Inverts bit 0 and 1 only keeping everything else
+	movwf	PORTE
+	bsf		PORTE, 2
+	goto	END_DC_TIMER_ISR
+END_DC_TIMER_ISR
 	return
 				
 ;----------------------------------
@@ -954,22 +977,6 @@ ClrLCD
 	movlw	B'00000001'
 	call	WR_INS
     return
-   
-;************************
-; Turn into 1 line mode *
-;************************
-OneLineMode
-	movlw	B'00100000'
-	call	WR_INS
-	return
-
-;************************
-; Turn into 2 line mode *
-;************************
-TwoLineMode
-	movlw	B'00101000'
-	call	WR_INS
-	return
 	
 ;*****************
 ; Display Cursor *
